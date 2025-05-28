@@ -60,11 +60,10 @@ class UdpClient:
 
 
 if __name__ == "__main__":
-    # client = UdpClient(HOST, PORT)
     client = TcpClient(HOST, PORT)
     client.connect()
 
     # client.connect()
 
-    time.sleep(3)
+    time.sleep(10)
     client.close()

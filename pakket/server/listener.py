@@ -63,6 +63,9 @@ class TcpListener(Service):
     def listen(self):
         """Main thread receives messages and puts them into the task queue."""
         while not self.shutdown_event.is_set():
+            conn = None
+            addr = None
+
             try:
                 conn, addr = self.socket.accept()
                 msg = conn.recv(1024)
@@ -71,21 +74,26 @@ class TcpListener(Service):
             except socket.timeout:
                 continue
             except Exception as e:
-                print(f"Unexpected receive error: {e}")
+                if conn and addr:
+                    conn.sendall(f"Transport Error: {e}".encode("utf-8"))
+                    conn.close()
 
     def worker(self):
         """Worker thread pulls from queue and calls the inner service."""
         while not self.shutdown_event.is_set():
+            request = None
+
             try:
                 request = self.task_queue.get(timeout=1)
                 msg = self.call(request.msg)
-                print(msg.to_bytes())
                 request.socket.sendall(msg.to_bytes())
                 request.socket.close()
             except queue.Empty:
                 continue
             except Exception as e:
-                print(f"Worker error: {e}")
+                if request:
+                    request.socket.sendall(f"Error: {e}".encode("utf-8"))
+                    request.socket.close()
 
     def call(self, msg: bytes) -> Message:
         return self.service.call(msg)
@@ -126,6 +134,8 @@ class UdpListener(Service):
     def listen(self):
         """Main thread receives messages and puts them into the task queue."""
         while not self.shutdown_event.is_set():
+            addr = None
+
             try:
                 msg, addr = self.socket.recvfrom(1024)
                 request = TransportMessage(self.socket, addr[0], addr[1], msg)
@@ -133,11 +143,13 @@ class UdpListener(Service):
             except socket.timeout:
                 continue
             except Exception as e:
-                print(f"Unexpected receive error: {e}")
+                if addr:
+                    self.socket.sendall(f"Error: {e}".encode("utf-8"))
 
     def worker(self):
         """Worker thread pulls from queue and calls the inner service."""
         while not self.shutdown_event.is_set():
+            request = None
             try:
                 request = self.task_queue.get(timeout=1)
                 response = self.call(request)
@@ -149,7 +161,11 @@ class UdpListener(Service):
             except queue.Empty:
                 continue
             except Exception as e:
-                print(f"Worker error: {e}")
+                if request:
+                    self.socket.sendto(
+                        f"Transport Error: {e}".encode("utf-8"),
+                        (request.addr, request.port),
+                    )
 
     def call(self, msg: bytes) -> Message:
         return self.service.call(msg)

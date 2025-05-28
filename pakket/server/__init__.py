@@ -1,4 +1,4 @@
-from .http import HttpRequest, Http, HttpResponse, HttpMethod, StatusCode
+from .http import HttpRequest, Router, HttpResponse, HttpMethod, StatusCode
 from .listener import (
     TcpListener,
     UdpListener,
@@ -10,7 +10,7 @@ from .listener import (
 # Public API of the 'engine' module
 __all__ = [
     "HttpRequest",
-    "Http",
+    "Router",
     "HttpResponse",
     "HttpMethod",
     "StatusCode",

@@ -1,9 +1,11 @@
 from enum import Enum
 from dataclasses import dataclass
-from typing import Callable, Dict, List
+import inspect
+from typing import Any, Callable, Dict
 import re
 import json
 from urllib.parse import urlparse, parse_qs
+from pydantic import ValidationError, create_model
 from .base import Service, Message
 
 
@@ -30,7 +32,7 @@ class StatusCode(Enum):
 class HttpMethod(Enum):
     GET = "GET"
     POST = "POST"
-    UPDATE = "UPDATE"
+    PUT = "PUT"
     DELETE = "DELETE"
 
     @staticmethod
@@ -40,8 +42,8 @@ class HttpMethod(Enum):
                 return HttpMethod.GET
             case "POST":
                 return HttpMethod.POST
-            case "UPDATE":
-                return HttpMethod.UPDATE
+            case "PUT":
+                return HttpMethod.PUT
             case "DELETE":
                 return HttpMethod.DELETE
             case _:
@@ -53,33 +55,34 @@ class HttpRequest:
     method: HttpMethod
     headers: Dict[str, str]
     path: str
-    query: Dict[str, List[str]]
-    body: str
+    query: Dict[str, Any]
+    body: Dict[str, Any]
 
-    @property
-    def args(self) -> dict:
-        # Try to parse JSON body
-        try:
-            parsed_body = json.loads(self.body) if self.body else {}
-            if not isinstance(parsed_body, dict):
-                parsed_body = {}
-        except json.JSONDecodeError:
-            parsed_body = {}
+    def match_path(self, template: str):
+        """Matches template path to user passed path."""
+        pattern = re.sub(r"\{(\w+)\}", r"(?P<\1>[^/]+)", template)
+        match = re.fullmatch(pattern, self.path)
+        if match:
+            path_args = match.groupdict()
+            return {**path_args, **self.query, **self.body}
 
-        # Merge body and query
-        return {**self.query, **parsed_body}
+        return None
 
     @staticmethod
     def from_bytes(raw: bytes) -> "HttpRequest":
+        """Construct HttpRequest from the raw message bytes."""
         # Split Head and Body
         head, _, body = raw.partition(b"\r\n\r\n")
         header_str = head.decode("utf-8", errors="replace")
         head_lines = header_str.splitlines()
 
         # Start Line
-        method, url, version = head_lines[0].split(" ")
+        method, url, _ = head_lines[0].split(" ")
         parsed = urlparse(url)
-        query_params = parse_qs(parsed.query)  # convert to dict
+        query_params = {}
+        for k, v in parse_qs(parsed.query).items():
+            if len(v) == 1:
+                query_params[k] = v[0]
 
         # Headers
         headers = {}
@@ -90,15 +93,15 @@ class HttpRequest:
             headers[key.lower()] = value
 
         # Body
-        charset = "utf-8"
-        body_str = body.decode(charset, errors="replace")
+        body_str = body.decode("utf-8", errors="replace")
+        body = json.loads(body_str) if body_str else {}
 
         return HttpRequest(
             HttpMethod.from_str(method),
             headers,
             parsed.path,
             query_params,
-            body_str,
+            body,
         )
 
 
@@ -109,6 +112,7 @@ class HttpResponse(Message):
     body: bytes
 
     def to_bytes(self) -> bytes:
+        """Convert to bytes ready for transportation."""
         msg = b""
         status_code, status_text = self.statuscode.value
         msg += f"HTTP/1.1 {status_code} {status_text}\r\n".encode("utf-8")
@@ -119,52 +123,82 @@ class HttpResponse(Message):
         return msg + self.body
 
     @staticmethod
+    def ok(data: Any, code: StatusCode = StatusCode.OK) -> "HttpResponse":
+        raw = json.dumps({"status": "ok", "data": data}).encode("utf-8")
+        headers = {
+            "Content-Type": "application/json",
+            "Content-Length": str(len(raw)),
+        }
+        return HttpResponse(code, headers, raw)
+
+    @staticmethod
     def error(msg: str, code: StatusCode) -> "HttpResponse":
-        return HttpResponse(
-            statuscode=code,
-            headers={
-                "Content-Type": "text/plain",
-                "Content-Length": str(len(msg)),
-            },
-            body=msg.encode("utf-8"),
+        body = json.dumps({"status": "error", "error": msg}).encode("utf-8")
+        headers = {
+            "Content-Type": "application/json",
+            "Content-Length": str(len(body)),
+        }
+        return HttpResponse(code, headers, body)
+
+
+def validate_data(func: Callable, data: dict) -> dict:
+    """
+    Valdates date against a funcs expected arguement types.
+
+    Return:
+        - pydantic.BaseModel
+    """
+    fields = {}
+
+    sig = inspect.signature(func)
+    for name, param in sig.parameters.items():
+        annotation = (
+            param.annotation if param.annotation is not inspect._empty else Any
         )
+        default = param.default if param.default is not inspect._empty else ...
+        fields[name] = (annotation, default)
+
+    model = create_model("ValidationModel", **fields)
+
+    try:
+        validated = model.model_validate(data)
+        return dict(validated)
+    except ValidationError as e:
+        raise (e)
 
 
-def match_path(template: str, actual: str):
-    pattern = re.sub(r"\{(\w+)\}", r"(?P<\1>[^/]+)", template)
-    match = re.fullmatch(pattern, actual)
-    if match:
-        return match.groupdict()
-    return None
-
-
-class Http(Service):
+class Router(Service):
     def __init__(self):
         self.routes = {}
 
     def add_route(self, method: HttpMethod, path: str, func: Callable):
+        """Add new routes to instance."""
         self.routes.setdefault(method, []).append((path, func))
 
     def route(self, request: HttpRequest) -> HttpResponse:
+        """Route request to proper endpoint and calls handler."""
         method_routes = self.routes.get(request.method, [])
 
         for temp, func in method_routes:
-            path_params = match_path(temp, request.path)
-            if path_params:
-                path_params.update(request.args)
+            args = request.match_path(temp)
+            if args:
                 try:
-                    return func(**path_params)
+                    data = validate_data(func, args)
+                    return func(**data)
                 except Exception as e:
                     return HttpResponse.error(str(e), StatusCode.BAD_REQUEST)
 
         return HttpResponse.error("Bad endpoint", StatusCode.NOT_FOUND)
 
     def call(self, msg: bytes) -> Message:
+        """Main entry point, recieves request msg in raw bytes."""
         http_req = HttpRequest.from_bytes(msg)
         http_response = self.route(http_req)
         return http_response
 
     def get(self, path: str):
+        """Convenient way to add a GET path with decorator"""
+
         def decorator(func):
             self.add_route(HttpMethod.GET, path, func)
             return func
@@ -172,20 +206,26 @@ class Http(Service):
         return decorator
 
     def post(self, path: str):
+        """Convenient way to add a POST path with decorator"""
+
         def decorator(func):
             self.add_route(HttpMethod.POST, path, func)
             return func
 
         return decorator
 
-    def update(self, path: str):
+    def put(self, path: str):
+        """Convenient way to add a PUT path with decorator"""
+
         def decorator(func):
-            self.add_route(HttpMethod.UPDATE, path, func)
+            self.add_route(HttpMethod.PUT, path, func)
             return func
 
         return decorator
 
     def delete(self, path: str):
+        """Convenient way to add a DELETE path with decorator"""
+
         def decorator(func):
             self.add_route(HttpMethod.DELETE, path, func)
             return func

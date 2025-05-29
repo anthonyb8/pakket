@@ -1,6 +1,6 @@
 # PAKKET
 
-**PAKKET** is an experimental educational project focused on building a low-level network protocol library from scratch.
+**PAKKET** is an experimental educational project focused on building a network protocol library from using sockets.
 
 The goal is to explore and implement the core layers of network communication—starting at the **transport layer** (TCP & UDP) and moving up to **application protocols** like **HTTP** and **WebSocket**.
 

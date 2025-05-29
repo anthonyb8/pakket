@@ -44,19 +44,22 @@ if __name__ == "__main__":
 
     # Get
     response = client.get(id)
+    print(f"GET : {response}")
     assert response["status"] == "ok"
     assert response["data"] == "You got ID :1 "
 
     # Post
     response = client.post(body)
+    print(f"POST : {response}")
     assert response["status"] == "ok"
     assert (
         response["data"]
         == "You created instance id: 1, name: test,other: ['a', 'b'], otherstuff: {'a': 1, 'b': 2}, temp: 1"
     )
 
-    # PUt
+    # PUT
     response = client.put(id, body)
+    print(f"PUT : {response}")
     assert response["status"] == "ok"
     assert (
         response["data"]
@@ -65,5 +68,6 @@ if __name__ == "__main__":
 
     # Delete
     response = client.delete(id)
+    print(f"DELETE : {response}")
     assert response["status"] == "ok"
     assert response["data"] == "You deleted ID :1 "

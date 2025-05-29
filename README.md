@@ -4,13 +4,26 @@
 
 The goal is to explore and implement the core layers of network communication—starting at the **transport layer** (TCP & UDP) and moving up to **application protocols** like **HTTP** and **WebSocket**.
 
-## ✨ Goals
+## Goals
 
 - Understand and implement TCP & UDP handling
 - Build reusable socket-based transmission layers
 - Layer application protocols (HTTP, WebSocket) on top
 - Explore routing, parsing, and service composition
 
-## 📚 Purpose
+## Purpose
 
 This project is **not** production-ready — it's for **learning**, **exploration**, and **experimentation** with how networked systems are structured from the ground up.
+
+## Example
+
+```{python}
+pip install -r requirements.txt
+```
+Run in seperate terminal instances. 
+```{python
+python -m demo.server
+```
+```{python}
+python -m demo.client
+```
